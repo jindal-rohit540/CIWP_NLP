@@ -101,18 +101,30 @@ def build_context(rows: pd.DataFrame, max_rows: int = 60) -> str:
     return "\n".join(parts)
 
 
-def call_openai(system: str, user: str, model: str = "gpt-4o") -> str:
+def call_openai(system: str, user: str, model: str = "gpt-4o-mini") -> str:
     # On Streamlit Cloud the key comes from st.secrets; locally it comes from .env
     api_key = st.secrets.get("OPENAI_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         return "Error: OPENAI_API_KEY not configured. Add it to Streamlit secrets or your .env file."
-    client = OpenAI(api_key=api_key)
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        max_tokens=2000,
-    )
-    return resp.choices[0].message.content.strip()
+    try:
+        client = OpenAI(api_key=api_key)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=2000,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        err = str(e)
+        if "rate_limit" in err.lower() or "429" in err:
+            return (
+                "**Rate limit reached.** Your OpenAI account has hit its usage quota. "
+                "Please add billing credits at platform.openai.com/settings/billing, "
+                "or try switching to **gpt-4o-mini** (cheaper) in the sidebar."
+            )
+        if "auth" in err.lower() or "401" in err:
+            return "**Invalid API key.** Check your key in Streamlit secrets or .env."
+        return f"**API error:** {err}"
 
 
 # ── Evaluation logic (deterministic + LLM) ───────────────────────────────────
@@ -206,7 +218,7 @@ def main():
 
         st.divider()
         st.header("Model")
-        model = st.selectbox("OpenAI model", ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"])
+        model = st.selectbox("OpenAI model", ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"])
 
     # Apply filters
     filt = df.copy()
