@@ -11,7 +11,7 @@ load_dotenv()
 # ── Config ────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="CIWP Intelligence", page_icon="🏫", layout="wide")
 
-DATA_FILES = {
+EMBEDDED_DATA_FILES = {
     "Network 6":  "Data/N6 CIWP_Priority_Extract_20260608_1625.xlsx",
     "Network 10": "Data/N10 CIWP_Priority_Extract_20260608_1629.xlsx",
 }
@@ -36,11 +36,18 @@ COL_MAP = {
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+def _decode_html(df: pd.DataFrame) -> pd.DataFrame:
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].apply(lambda x: html.unescape(str(x)) if pd.notna(x) else x)
+    return df
+
+
 @st.cache_data
-def load_data() -> pd.DataFrame:
+def load_embedded_data() -> pd.DataFrame:
     frames = []
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    for net, path in DATA_FILES.items():
+    for net, path in EMBEDDED_DATA_FILES.items():
         full = os.path.join(script_dir, path)
         if os.path.exists(full):
             df = pd.read_excel(full)
@@ -48,14 +55,20 @@ def load_data() -> pd.DataFrame:
             frames.append(df)
     if not frames:
         return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
-    # Decode HTML entities that appear in the raw export
-    for col in combined.columns:
-        if combined[col].dtype == object:
-            combined[col] = combined[col].apply(
-                lambda x: html.unescape(str(x)) if pd.notna(x) else x
-            )
-    return combined
+    return _decode_html(pd.concat(frames, ignore_index=True))
+
+
+def load_uploaded_data(uploaded_files) -> pd.DataFrame:
+    frames = []
+    for uf in uploaded_files:
+        df = pd.read_excel(uf)
+        # Use the Network column from the file if present, else derive from filename
+        if "Network" not in df.columns:
+            df["Network"] = uf.name.replace(".xlsx", "")
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    return _decode_html(pd.concat(frames, ignore_index=True))
 
 
 def clean(text) -> str:
@@ -89,9 +102,10 @@ def build_context(rows: pd.DataFrame, max_rows: int = 60) -> str:
 
 
 def call_openai(system: str, user: str, model: str = "gpt-4o") -> str:
-    api_key = os.getenv("OPENAI_API_KEY", "")
+    # On Streamlit Cloud the key comes from st.secrets; locally it comes from .env
+    api_key = st.secrets.get("OPENAI_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
-        return "Error: OPENAI_API_KEY not set in .env"
+        return "Error: OPENAI_API_KEY not configured. Add it to Streamlit secrets or your .env file."
     client = OpenAI(api_key=api_key)
     resp = client.chat.completions.create(
         model=model,
@@ -155,14 +169,33 @@ def main():
     st.title("🏫 CIWP Intelligence — CPS Network Analyzer")
     st.caption("Analyze Continuous Improvement Work Plans across Chicago Public Schools networks.")
 
-    df = load_data()
+    # ── Sidebar ───────────────────────────────────────────────────────────────
+    with st.sidebar:
+        st.header("Data")
+        uploaded_files = st.file_uploader(
+            "Upload additional network extract(s)",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            help="Upload CIWP Priority Extract .xlsx files for any network. "
+                 "Networks 6 and 10 are already loaded.",
+        )
+
+        st.divider()
+        st.header("Filters")
+
+    # Load and merge embedded + uploaded data
+    embedded = load_embedded_data()
+    if uploaded_files:
+        uploaded = load_uploaded_data(uploaded_files)
+        df = pd.concat([embedded, uploaded], ignore_index=True) if not embedded.empty else uploaded
+    else:
+        df = embedded
+
     if df.empty:
-        st.error("No data found. Make sure the Data/ folder with .xlsx files is present.")
+        st.warning("No data loaded. Upload a CIWP Priority Extract .xlsx to get started.")
         return
 
-    # ── Sidebar filters ───────────────────────────────────────────────────────
     with st.sidebar:
-        st.header("Filters")
         networks = ["All Networks"] + sorted(df["Network"].dropna().unique().tolist())
         sel_net = st.selectbox("Network", networks)
 
