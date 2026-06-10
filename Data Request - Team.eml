@@ -1,0 +1,103 @@
+MIME-Version: 1.0
+Date: Tue, 2 Jun 2026 01:04:46 +0530
+Message-ID: <CAFZMZkksffDCvzLpcMfqtXa4e9v=csrNcsRmqcJ0wDfJbDE7RQ@mail.gmail.com>
+Subject: Data Request - Team
+From: "Jindal, Rohit" <rjindal@cps.edu>
+To: Iliana Vargas <imvargas1@cps.edu>, Rohith Dasararaju <rdasararaju@cps.edu>
+Cc: Conor Moloney <cromaoldomhn@cps.edu>, Madhushalini Billingi <mbillingi@cps.edu>
+Content-Type: multipart/alternative; boundary="0000000000007c744f065336492d"
+
+--0000000000007c744f065336492d
+Content-Type: text/plain; charset="UTF-8"
+
+*Q1. School Type and Zoned School Information*
+
+I have reviewed mdmf_framework.dbo.dim_school and would like additional
+information about school types (e.g., selective, zoned, magnet, charter,
+etc.) so that I can analyze enrollment patterns separately for each
+category, as the enrollment process differs significantly across these
+school types.
+
+I also understand that each student is assigned a zoned school based on
+their residence. I would like access to data that identifies a student's
+assigned zoned school, as this would allow me to analyze:
+
+   -
+
+   The percentage of students who enroll in their assigned zoned school.
+   -
+
+   The percentage of students who enroll in a different school.
+   -
+
+   Enrollment trends across different school assignment types.
+
+------------------------------
+
+*Q2. Grade 9 Enrollment Application and Admissions Data*
+
+I would like access to Grade 9 enrollment application data, as Grade 9 is a
+key entry point into high school.
+
+My understanding is that students may apply to selective high schools
+through admissions processes such as the SSAT or ISEE, while others enroll
+in non-selective high schools. Access to the following data would be
+helpful:
+
+   -
+
+   Grade 9 application data.
+   -
+
+   SSAT and/or ISEE participation and results data (if available).
+   -
+
+   High school application preferences and placement outcomes.
+
+This information would help improve Grade 9 enrollment forecasting.
+------------------------------
+
+*Q3. Birth Rate Data for Kindergarten Enrollment Forecasting*
+
+Birth rates are typically a leading indicator of future Kindergarten
+enrollment, which is a key entry point into elementary school.
+
+Could you please advise where I can obtain birth rate data at an
+appropriate geographic level (e.g., district, neighborhood, attendance
+zone, census tract, or similar)? This information would be valuable for
+improving Kindergarten enrollment forecasts.
+
+--0000000000007c744f065336492d
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr"><p><strong>Q1. School Type and Zoned School Information</s=
+trong></p><p>I have reviewed <code>mdmf_framework.dbo.dim_school</code> and=
+ would like additional information about school types (e.g., selective, zon=
+ed, magnet, charter, etc.) so that I can analyze enrollment patterns separa=
+tely for each category, as the enrollment process differs significantly acr=
+oss these school types.</p><p>I also understand that each student is assign=
+ed a zoned school based on their residence. I would like access to data tha=
+t identifies a student&#39;s assigned zoned school, as this would allow me =
+to analyze:</p><ul><li><p>The percentage of students who enroll in their as=
+signed zoned school.</p></li><li><p>The percentage of students who enroll i=
+n a different school.</p></li><li><p>Enrollment trends across different sch=
+ool assignment types.</p></li></ul><hr><p><strong>Q2. Grade 9 Enrollment Ap=
+plication and Admissions Data</strong></p><p>I would like access to Grade 9=
+ enrollment application data, as Grade 9 is a key entry point into high sch=
+ool.</p><p>My understanding is that students may apply to selective high sc=
+hools through admissions processes such as the SSAT or ISEE, while others e=
+nroll in non-selective high schools. Access to the following data would be =
+helpful:</p><ul><li><p>Grade 9 application data.</p></li><li><p>SSAT and/or=
+ ISEE participation and results data (if available).</p></li><li><p>High sc=
+hool application preferences and placement outcomes.</p></li></ul><p>This i=
+nformation would help improve Grade 9 enrollment forecasting.</p><hr><p><st=
+rong>Q3. Birth Rate Data for Kindergarten Enrollment Forecasting</strong></=
+p><p>Birth rates are typically a leading indicator of future Kindergarten e=
+nrollment, which is a key entry point into elementary school.</p><p>Could y=
+ou please advise where I can obtain birth rate data at an appropriate geogr=
+aphic level (e.g., district, neighborhood, attendance zone, census tract, o=
+r similar)? This information would be valuable for improving Kindergarten e=
+nrollment forecasts.</p></div>
+
+--0000000000007c744f065336492d--
