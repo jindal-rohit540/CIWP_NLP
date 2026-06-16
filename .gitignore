@@ -4,3 +4,12 @@ __pycache__/
 *.pyc
 .DS_Store
 .streamlit/secrets.toml
+chroma/
+
+# Superseded / non-app artifacts — keep out of the deploy repo
+ciwp_v7_anthropic.html
+*.pptx
+Data/CIWP_Priority_Extract_20260611_1632.xlsx
+CIWP_AI_Capability_Proposal_v2.docx.pdf
+ONS CI ML  Project Ideas.pdf
+*.eml
