@@ -4,5 +4,5 @@ anthropic>=0.25
 pandas>=2.0
 openpyxl>=3.1
 python-dotenv>=1.0
-chromadb>=0.5
+numpy>=1.26
 rank-bm25>=0.2

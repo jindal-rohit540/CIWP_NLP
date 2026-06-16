@@ -13,7 +13,8 @@ Retrieval is filter-first: sidebar filters become hard *metadata* constraints on
 the vector store, and semantic similarity ranks within that scope. This replaces
 the old "serialize every filtered row, cap at 150, even-sample" approach.
 
-Embeddings: OpenAI text-embedding-3-small. Store: persistent ChromaDB (./chroma).
+Embeddings: OpenAI text-embedding-3-small. Store: in-process NumPy cosine index
+(no native deps — chosen so it deploys cleanly on Streamlit Cloud).
 """
 
 import os
@@ -21,15 +22,21 @@ import re
 import html
 import hashlib
 
+import numpy as np
 import pandas as pd
-import chromadb
 from openai import OpenAI
 
 # ── Config ──────────────────────────────────────────────────────────────────
+# Vector store is a tiny in-process NumPy index (cosine over OpenAI embeddings).
+# No ChromaDB / onnxruntime / protobuf — those are heavy and brittle on Streamlit
+# Cloud. For ~1,249 chunks a brute-force NumPy dot product is instant and has zero
+# native dependencies. The store lives in module memory; on Cloud's ephemeral disk
+# it's rebuilt once per container via the auto-build path in app.py.
 EMBED_MODEL = "text-embedding-3-small"
-COLLECTION_NAME = "ciwp_chains"
-CHROMA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma")
 EMBED_BATCH = 256  # rows per embedding API call
+
+# In-memory index: parallel arrays keyed by position.
+_STORE = {"ids": [], "docs": [], "metas": [], "embs": None}  # embs: np.ndarray (n, d)
 
 # Source column names (mirrors COL_MAP in app.py).
 C_SCHOOL = "Plan Name"
@@ -79,7 +86,7 @@ def _chunk_id(school: str, priority: str) -> str:
 def chunk_plans(df: pd.DataFrame):
     """Collapse the denormalized rows into one chunk per (School x Priority).
 
-    Returns (ids, documents, metadatas) ready for a Chroma collection.
+    Returns (ids, documents, metadatas) ready to embed into the NumPy index.
     """
     ids, docs, metas = [], [], []
 
@@ -150,30 +157,17 @@ def _embed(texts, client: OpenAI):
 
 
 # ── Index lifecycle ───────────────────────────────────────────────────────────
-def _client():
-    return chromadb.PersistentClient(path=CHROMA_DIR)
-
-
-def get_collection():
-    return _client().get_or_create_collection(
-        name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
-    )
-
-
 def index_status() -> dict:
     """Cheap check used by the UI to decide whether to prompt a build."""
-    try:
-        col = get_collection()
-        return {"ready": True, "count": col.count()}
-    except Exception as e:
-        return {"ready": False, "count": 0, "error": str(e)}
+    return {"ready": _STORE["embs"] is not None, "count": len(_STORE["ids"])}
 
 
 def build_index(df: pd.DataFrame, upsert: bool = True, progress=None):
-    """Chunk df, embed, and upsert into Chroma. Returns the number of chunks.
+    """Chunk df, embed, and load into the in-memory NumPy index.
 
-    `upsert=True` adds/updates without wiping the store (used for uploads).
-    `progress` is an optional callback(done, total) for a Streamlit progress bar.
+    `upsert=True` merges into the existing store (dedupes by chunk id) — used for
+    uploads. `progress` is an optional callback(done, total) for a progress bar.
+    Returns the total chunk count in the store.
     """
     key = _api_key()
     if not key:
@@ -181,29 +175,47 @@ def build_index(df: pd.DataFrame, upsert: bool = True, progress=None):
 
     ids, docs, metas = chunk_plans(df)
     if not ids:
-        return 0
+        return len(_STORE["ids"])
 
     client = OpenAI(api_key=key)
-    col = get_collection()
-    if not upsert:
-        # Fresh rebuild: drop and recreate the collection.
-        _client().delete_collection(COLLECTION_NAME)
-        col = get_collection()
-
     total = len(ids)
+    vecs = []
     for i in range(0, total, EMBED_BATCH):
         sl = slice(i, i + EMBED_BATCH)
-        embs = _embed(docs[sl], client)
-        col.upsert(ids=ids[sl], documents=docs[sl], metadatas=metas[sl], embeddings=embs)
+        vecs.extend(_embed(docs[sl], client))
         if progress:
             progress(min(i + EMBED_BATCH, total), total)
-    return total
+    new_embs = _normalize(np.asarray(vecs, dtype=np.float32))
+
+    if upsert and _STORE["embs"] is not None:
+        # Merge, with new entries overriding any existing chunk of the same id.
+        merged = {cid: (d, m, e) for cid, d, m, e
+                  in zip(_STORE["ids"], _STORE["docs"], _STORE["metas"], _STORE["embs"])}
+        for cid, d, m, e in zip(ids, docs, metas, new_embs):
+            merged[cid] = (d, m, e)
+        _STORE["ids"] = list(merged.keys())
+        _STORE["docs"] = [v[0] for v in merged.values()]
+        _STORE["metas"] = [v[1] for v in merged.values()]
+        _STORE["embs"] = np.asarray([v[2] for v in merged.values()], dtype=np.float32)
+    else:
+        _STORE["ids"], _STORE["docs"], _STORE["metas"], _STORE["embs"] = ids, docs, metas, new_embs
+
+    # Invalidate the BM25 cache so it rebuilds against the new corpus.
+    _BM25_CACHE["sig"] = None
+    return len(_STORE["ids"])
+
+
+def _normalize(mat: np.ndarray) -> np.ndarray:
+    """L2-normalize rows so a dot product equals cosine similarity."""
+    norms = np.linalg.norm(mat, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return mat / norms
 
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
-# Hybrid = dense (Chroma embeddings, semantic) + sparse (BM25, lexical), fused
-# with Reciprocal Rank Fusion, then a light re-anchor rerank that boosts chunks
-# literally containing the query's salient terms (catches acronyms: MTSS, IAR…).
+# Hybrid = dense (NumPy cosine over embeddings, semantic) + sparse (BM25, lexical),
+# fused with Reciprocal Rank Fusion, then a light re-anchor rerank that boosts
+# chunks literally containing the query's salient terms (catches acronyms: MTSS…).
 
 RRF_K = 60          # RRF damping constant
 DENSE_WEIGHT = 1.0  # relative weight of the dense ranker in fusion
@@ -211,44 +223,24 @@ SPARSE_WEIGHT = 1.0  # relative weight of the BM25 ranker in fusion
 ANCHOR_BOOST = 0.15  # rerank bump per query term present in a chunk
 
 
-def _where(network: str = None, foundation: str = None, priority_number: int = None):
-    """Build a Chroma metadata filter from the active sidebar filters."""
-    clauses = []
-    if network and network != "All Networks":
-        clauses.append({"network": network})
-    if foundation and foundation != "All Priorities":
-        clauses.append({"foundation": foundation})
-    if priority_number:
-        clauses.append({"priority_number": priority_number})
-    if not clauses:
-        return None
-    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
-
-
 def _tokenize(text: str):
     return re.findall(r"[a-z0-9]+", str(text).lower())
 
 
-# Cached BM25 corpus: built once from the whole collection, sliced per-query by
-# the in-scope chunk ids so the metadata filter still applies to sparse search.
-_BM25_CACHE = {"sig": None, "ids": None, "metas": None, "docs": None, "bm25": None}
+# Cached BM25 corpus, rebuilt whenever the store changes (sig = chunk count).
+_BM25_CACHE = {"sig": None, "bm25": None}
 
 
 def _ensure_bm25():
     from rank_bm25 import BM25Okapi
-    col = get_collection()
-    sig = col.count()
+    sig = len(_STORE["ids"])
     if _BM25_CACHE["sig"] == sig and _BM25_CACHE["bm25"] is not None:
-        return _BM25_CACHE
-    got = col.get(include=["documents", "metadatas"])
-    ids = got.get("ids", [])
-    docs = got.get("documents", [])
-    metas = got.get("metadatas", [])
+        return _BM25_CACHE["bm25"]
+    docs = _STORE["docs"]
     _BM25_CACHE.update(
-        sig=sig, ids=ids, docs=docs, metas=metas,
-        bm25=BM25Okapi([_tokenize(d) for d in docs]) if docs else None,
+        sig=sig, bm25=BM25Okapi([_tokenize(d) for d in docs]) if docs else None,
     )
-    return _BM25_CACHE
+    return _BM25_CACHE["bm25"]
 
 
 def _meta_match(meta, network, foundation, priority_number) -> bool:
@@ -261,40 +253,46 @@ def _meta_match(meta, network, foundation, priority_number) -> bool:
     return True
 
 
-def _dense_ranking(query, client, where, k):
-    """Return ordered list of (chunk_id, payload) from the vector store."""
-    col = get_collection()
-    q_emb = _embed([query], client)[0]
-    res = col.query(
-        query_embeddings=[q_emb], n_results=k, where=where,
-        include=["documents", "metadatas", "distances"],
-    )
-    ids = res.get("ids", [[]])[0]
-    docs = res.get("documents", [[]])[0]
-    metas = res.get("metadatas", [[]])[0]
-    dists = res.get("distances", [[]])[0]
+def _scope_indices(network, foundation, priority_number):
+    """Positions in the store matching the metadata filter (hard constraint)."""
     return [
-        (cid, {"document": d, "metadata": m, "distance": dist})
-        for cid, d, m, dist in zip(ids, docs, metas, dists)
+        i for i, m in enumerate(_STORE["metas"])
+        if _meta_match(m, network, foundation, priority_number)
     ]
 
 
-def _sparse_ranking(query, where_args, k):
-    """BM25 ranking restricted to chunks matching the metadata filter."""
-    cache = _ensure_bm25()
-    if not cache["bm25"]:
+def _dense_ranking(query, client, scope, k):
+    """Cosine top-k over the in-scope embeddings. Returns (chunk_id, payload)."""
+    if not scope:
         return []
-    network, foundation, priority_number = where_args
-    scores = cache["bm25"].get_scores(_tokenize(query))
-    scored = [
-        (cache["ids"][i], scores[i], cache["docs"][i], cache["metas"][i])
-        for i in range(len(cache["ids"]))
-        if _meta_match(cache["metas"][i], network, foundation, priority_number)
-    ]
-    scored.sort(key=lambda x: x[1], reverse=True)
+    q = _embed([query], client)[0]
+    q = np.asarray(q, dtype=np.float32)
+    q /= (np.linalg.norm(q) or 1.0)
+    sub = _STORE["embs"][scope]            # (s, d), already row-normalized
+    sims = sub @ q                          # cosine similarity
+    order = np.argsort(-sims)[:k]
+    out = []
+    for j in order:
+        i = scope[int(j)]
+        out.append((
+            _STORE["ids"][i],
+            {"document": _STORE["docs"][i], "metadata": _STORE["metas"][i],
+             "distance": float(1.0 - sims[int(j)])},
+        ))
+    return out
+
+
+def _sparse_ranking(query, scope, k):
+    """BM25 ranking restricted to the in-scope chunk positions."""
+    bm25 = _ensure_bm25()
+    if not bm25 or not scope:
+        return []
+    scores = bm25.get_scores(_tokenize(query))
+    scored = sorted(scope, key=lambda i: scores[i], reverse=True)[:k]
     return [
-        (cid, {"document": d, "metadata": m, "distance": None})
-        for cid, _s, d, m in scored[:k]
+        (_STORE["ids"][i],
+         {"document": _STORE["docs"][i], "metadata": _STORE["metas"][i], "distance": None})
+        for i in scored
     ]
 
 
@@ -351,13 +349,15 @@ def retrieve(query: str, k: int = 40, network: str = None,
     if not key:
         raise RuntimeError("OPENAI_API_KEY not configured (Streamlit secrets or .env).")
 
+    if _STORE["embs"] is None:
+        raise RuntimeError("Index not built yet.")
+
     candidate_k = candidate_k or max(k * 4, 40)
-    where = _where(network, foundation, priority_number)
-    where_args = (network, foundation, priority_number)
+    scope = _scope_indices(network, foundation, priority_number)
     client = OpenAI(api_key=key)
 
-    dense = _dense_ranking(query, client, where, candidate_k)
-    sparse = _sparse_ranking(query, where_args, candidate_k)
+    dense = _dense_ranking(query, client, scope, candidate_k)
+    sparse = _sparse_ranking(query, scope, candidate_k)
 
     scores, payloads, prov = _rrf_fuse(dense, sparse)
     scores = _reanchor(query, scores, payloads, prov)
